@@ -1,0 +1,133 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gubernator-deployment
+  labels:
+    application: gubernator
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      application: gubernator
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8080"
+      labels:
+        application: gubernator
+    spec:
+      serviceAccountName: gubernator-sa
+      containers:
+        - name: gubernator-container
+          image: ghcr.io/gubernator-io/gubernator:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: 8081
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /v1/HealthCheck
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 20
+            timeoutSeconds: 1
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /v1/HealthCheck
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 1
+          env:
+            - name: GUBER_K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: GUBER_K8S_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: GUBER_GRPC_ADDRESS
+              value: 0.0.0.0:8081
+            - name: GUBER_HTTP_ADDRESS
+              value: 0.0.0.0:8080
+            - name: GUBER_PEER_DISCOVERY_TYPE
+              value: "k8s"
+            - name: GUBER_K8S_POD_PORT
+              value: "8081"
+            - name: GUBER_K8S_ENDPOINTS_SELECTOR
+              value: "application=gubernator"
+            - name: GUBER_DEBUG
+              value: "false"
+            - name: JAEGER_SAMPLER_TYPE
+              value: "probabilistic"
+            - name: JAEGER_SAMPLER_PARAM
+              value: "0.01"
+            - name: JAEGER_AGENT_PORT
+              value: "6831"
+          resources:
+            limits:
+              memory: "1Gi"
+            requests:
+              memory: "1Gi"
+      restartPolicy: Always
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gubernator-service
+  labels:
+    application: gubernator
+spec:
+  clusterIP: None
+  ports:
+    - name: grpc
+      targetPort: 8081
+      protocol: TCP
+      port: 8081
+    - name: http
+      targetPort: 8080
+      protocol: TCP
+      port: 8080
+  selector:
+    application: gubernator
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gubernator-sa
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gubernator-role
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - endpoints
+    verbs:
+      - list
+      - watch
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gubernator-role-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: gubernator-role
+subjects:
+  - kind: ServiceAccount
+    name: gubernator-sa
